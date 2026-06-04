@@ -386,8 +386,10 @@ async function doLoad() {
     const count = Object.keys(vals).length;
     Object.keys(vals).forEach(k => { db[k] = vals[k]; });
     // Rebuild rows AFTER db is populated
-    buildRec(); buildDes(); refresh();
-    toast(count > 0 ? '✅ '+count+' itens carregados' : '⚠️ Nenhum dado no Sheets','g');
+    // Update input values without rebuilding rows (preserves renamed labels)
+    updateInputValues();
+    refresh();
+    toast(count > 0 ? '✅ '+count+' itens' : '⚠️ Nenhum dado no Sheets','g');
   } catch(e) {
     toast('❌ Erro: '+e.message,'r');
   }
@@ -585,6 +587,23 @@ function buildDes() {
   list.appendChild(addBtn);
 }
 
+// Atualiza só os valores dos inputs sem recriar as linhas
+function updateInputValues() {
+  document.querySelectorAll('.irow').forEach(row => {
+    const lbl = row.querySelector('.ilabel');
+    const inp = row.querySelector('.iinput');
+    if (!lbl || !inp) return;
+    // Find the item by label text in current cats/recs
+    const item = lbl.textContent;
+    // Find which cat this row belongs to by traversing up
+    const body = row.closest('.cbody, #body-rec');
+    if (!body) return;
+    const cid = body.id === 'body-rec' ? 'rec' : body.id.replace('body-','');
+    const v = gv(cid, item);
+    inp.value = v ? v.toLocaleString('pt-BR',{minimumFractionDigits:2}) : '';
+  });
+}
+
 // ── HOME CATS ────────────────────────────────────────────────────
 function buildHomeCats() {
   const el=document.getElementById('home-cats'); el.innerHTML='';
@@ -656,11 +675,10 @@ async function saveItemName() {
   const scope=await askScope(item,novo);
   if(scope===null) return;
 
-  if(scope==='all'||scope==='forward'){
-    if(cid==='rec'){const i=recs.indexOf(item);if(i>=0)recs[i]=novo;}
-    else{const cat=cats.find(c=>c.id===cid);if(cat){const i=cat.items.indexOf(item);if(i>=0)cat.items[i]=novo;}}
-    saveStruct();
-  }
+  // Always update local struct regardless of scope
+  if(cid==='rec'){const i=recs.indexOf(item);if(i>=0)recs[i]=novo;}
+  else{const cat=cats.find(c=>c.id===cid);if(cat){const i=cat.items.indexOf(item);if(i>=0)cat.items[i]=novo;}}
+  saveStruct();
 
   // Migra valor
   const v=gv(cid,item);
@@ -797,13 +815,21 @@ async function init() {
   document.getElementById('last-save').textContent=localStorage.getItem('ff5_saved')||'—';
   hideLoad();
 
-  // 3. Carrega estrutura do servidor
+  // 3. Carrega estrutura do servidor APENAS se não tiver local salvo
+  const hasLocalStruct = localStorage.getItem('ff5_cats');
   if(navigator.onLine){
-    try{
-      const r=await api({action:'getStruct'});
-      if(r.cats){cats=JSON.parse(JSON.stringify(r.cats));recs=[...r.recs];}
-      try{localStorage.setItem('ff5_cats',JSON.stringify(cats));localStorage.setItem('ff5_recs',JSON.stringify(recs));}catch(e){}
-    }catch(e){}
+    if(!hasLocalStruct){
+      // Primeira vez: carrega estrutura do servidor
+      try{
+        const r=await api({action:'getStruct'});
+        if(r.cats){
+          cats=JSON.parse(JSON.stringify(r.cats));recs=[...r.recs];
+          localStorage.setItem('ff5_cats',JSON.stringify(cats));
+          localStorage.setItem('ff5_recs',JSON.stringify(recs));
+          buildRec(); buildDes();
+        }
+      }catch(e){}
+    }
     // 4. Carrega dados do mês atual
     await doLoad();
   }
