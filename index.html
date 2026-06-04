@@ -589,19 +589,8 @@ function buildDes() {
 
 // Atualiza só os valores dos inputs sem recriar as linhas
 function updateInputValues() {
-  document.querySelectorAll('.irow').forEach(row => {
-    const lbl = row.querySelector('.ilabel');
-    const inp = row.querySelector('.iinput');
-    if (!lbl || !inp) return;
-    // Find the item by label text in current cats/recs
-    const item = lbl.textContent;
-    // Find which cat this row belongs to by traversing up
-    const body = row.closest('.cbody, #body-rec');
-    if (!body) return;
-    const cid = body.id === 'body-rec' ? 'rec' : body.id.replace('body-','');
-    const v = gv(cid, item);
-    inp.value = v ? v.toLocaleString('pt-BR',{minimumFractionDigits:2}) : '';
-  });
+  // Reconstrói as linhas para garantir nomes corretos do recs/cats atuais
+  buildRec(); buildDes();
 }
 
 // ── HOME CATS ────────────────────────────────────────────────────
@@ -695,7 +684,12 @@ async function saveItemName() {
   });
   row.querySelector('.iedit').onclick=e=>{e.stopPropagation();itemCtx={cid,item:novo,row};document.getElementById('item-ttl').textContent='Editar: '+novo;document.getElementById('item-inp').value=novo;openOvl('ovl-item');setTimeout(()=>document.getElementById('item-inp').select(),300);};
 
-  if(navigator.onLine) api({action:'save',yr,mo,cat:cid,item:novo,val:v||0}).catch(()=>{});
+  // Salva imediatamente no Sheets: novo nome com valor + remove antigo zerado
+  if(navigator.onLine){
+    api({action:'save',yr,mo,cat:cid,item:novo,val:v||0}).catch(()=>{});
+    // Zera o item antigo no Sheets para evitar duplicata
+    if(item!==novo) api({action:'save',yr,mo,cat:cid,item:item,val:0}).catch(()=>{});
+  }
   refresh(); toast('✅ Renomeado','g');
 }
 
