@@ -520,24 +520,29 @@ function switchMonth(i) {
 }
 
 // ── UI ───────────────────────────────────────────────────────────
-function makeRow(cid, item) {
+function makeRow(cid, item, displayName) {
+  // displayName = alias se existir, senão usa item real
+  const label = displayName || db['__alias__'+K(cid,item)] || item;
   const row = document.createElement('div');
   row.className = 'irow';
-  const lbl = document.createElement('div'); lbl.className = 'ilabel'; lbl.textContent = item;
+  const lbl = document.createElement('div'); lbl.className = 'ilabel'; lbl.textContent = label;
   const inp = document.createElement('input');
   inp.type='text'; inp.inputMode='decimal'; inp.className='iinput'; inp.placeholder='0,00';
-  const v = gv(cid, item);
+  // Valor: busca pelo alias (novo nome) ou pelo nome original
+  const v = gv(cid, label !== item ? label : item) || gv(cid, item);
   if (v) inp.value = v.toLocaleString('pt-BR',{minimumFractionDigits:2});
   inp.addEventListener('focus', () => inp.select());
   inp.addEventListener('change', () => {
     const n = parseFloat(inp.value.replace(/\./g,'').replace(',','.')) || 0;
     inp.value = n ? n.toLocaleString('pt-BR',{minimumFractionDigits:2}) : '';
-    setVal(cid, item, n);
+    // Salva com o nome que está sendo exibido (alias ou original)
+    const currentLabel = lbl.textContent;
+    setVal(cid, currentLabel, n);
     refresh();
   });
   const btn = document.createElement('button'); btn.className='iedit';
   btn.innerHTML='<svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
-  btn.onclick = e => { e.stopPropagation(); itemCtx={cid,item,row}; document.getElementById('item-ttl').textContent='Editar: '+item; document.getElementById('item-inp').value=item; openOvl('ovl-item'); setTimeout(()=>document.getElementById('item-inp').select(),300); };
+  btn.onclick = e => { e.stopPropagation(); const cur=lbl.textContent; itemCtx={cid,item:cur,row}; document.getElementById('item-ttl').textContent='Editar: '+cur; document.getElementById('item-inp').value=cur; openOvl('ovl-item'); setTimeout(()=>document.getElementById('item-inp').select(),300); };
   row.append(lbl,inp,btn); return row;
 }
 
@@ -556,7 +561,13 @@ function makeAdd(cid) {
 
 function buildRec() {
   const body = document.getElementById('body-rec'); body.innerHTML='';
-  recs.forEach(i => body.appendChild(makeRow('rec',i)));
+  recs.forEach(i => {
+    // Check if there's an alias for this item in this month
+    const aliasKey = '__alias__'+K('rec',i);
+    const displayName = db[aliasKey] || i;
+    const row = makeRow('rec', i, displayName);
+    body.appendChild(row);
+  });
   body.appendChild(makeAdd('rec'));
 }
 
@@ -664,31 +675,52 @@ async function saveItemName() {
   const scope=await askScope(item,novo);
   if(scope===null) return;
 
-  // Always update local struct regardless of scope
-  if(cid==='rec'){const i=recs.indexOf(item);if(i>=0)recs[i]=novo;}
-  else{const cat=cats.find(c=>c.id===cid);if(cat){const i=cat.items.indexOf(item);if(i>=0)cat.items[i]=novo;}}
-  saveStruct();
-
-  // Migra valor
-  const v=gv(cid,item);
-  if(v){db[K(cid,novo)]=v;} delete db[K(cid,item)];
-
-  // Atualiza linha
-  row.querySelector('.ilabel').textContent=novo;
-  const inp=row.querySelector('.iinput');
-  inp.onchange=null;
-  inp.addEventListener('change',()=>{
-    const n=parseFloat(inp.value.replace(/\./g,'').replace(',','.'))||0;
-    inp.value=n?n.toLocaleString('pt-BR',{minimumFractionDigits:2}):'';
-    setVal(cid,novo,n);refresh();
-  });
-  row.querySelector('.iedit').onclick=e=>{e.stopPropagation();itemCtx={cid,item:novo,row};document.getElementById('item-ttl').textContent='Editar: '+novo;document.getElementById('item-inp').value=novo;openOvl('ovl-item');setTimeout(()=>document.getElementById('item-inp').select(),300);};
-
-  // Salva imediatamente no Sheets: novo nome com valor + remove antigo zerado
-  if(navigator.onLine){
-    api({action:'save',yr,mo,cat:cid,item:novo,val:v||0}).catch(()=>{});
-    // Zera o item antigo no Sheets para evitar duplicata
-    if(item!==novo) api({action:'save',yr,mo,cat:cid,item:item,val:0}).catch(()=>{});
+  if(scope==='this'){
+    // SÓ ESTE MÊS: guarda alias no db (chave especial), não altera recs/cats globais
+    const aliasKey = '__alias__'+K(cid,item);
+    db[aliasKey] = novo;
+    // Migra valor para chave com alias
+    const v=gv(cid,item);
+    if(v){ db[K(cid,novo)]=v; } 
+    delete db[K(cid,item)];
+    // Atualiza só o label na tela
+    row.querySelector('.ilabel').textContent=novo;
+    // Rewire input e edit button para usar novo nome na exibição mas item original como chave
+    const inp=row.querySelector('.iinput');
+    inp.onchange=null;
+    inp.addEventListener('change',()=>{
+      const n=parseFloat(inp.value.replace(/\./g,'').replace(',','.'))||0;
+      inp.value=n?n.toLocaleString('pt-BR',{minimumFractionDigits:2}):'';
+      db[K(cid,novo)]=n; refresh();
+    });
+    row.querySelector('.iedit').onclick=e=>{e.stopPropagation();itemCtx={cid,item:novo,row};document.getElementById('item-ttl').textContent='Editar: '+novo;document.getElementById('item-inp').value=novo;openOvl('ovl-item');setTimeout(()=>document.getElementById('item-inp').select(),300);};
+    // Salva no Sheets com novo nome
+    if(navigator.onLine){
+      api({action:'save',yr,mo,cat:cid,item:novo,val:v||0}).catch(()=>{});
+      if(item!==novo) api({action:'save',yr,mo,cat:cid,item:item,val:0}).catch(()=>{});
+    }
+  } else {
+    // ESTE E SEGUINTES / TODOS: atualiza estrutura global
+    if(cid==='rec'){const i=recs.indexOf(item);if(i>=0)recs[i]=novo;}
+    else{const cat=cats.find(c=>c.id===cid);if(cat){const i=cat.items.indexOf(item);if(i>=0)cat.items[i]=novo;}}
+    saveStruct();
+    // Migra valor
+    const v=gv(cid,item);
+    if(v){db[K(cid,novo)]=v;} delete db[K(cid,item)];
+    // Atualiza linha
+    row.querySelector('.ilabel').textContent=novo;
+    const inp=row.querySelector('.iinput');
+    inp.onchange=null;
+    inp.addEventListener('change',()=>{
+      const n=parseFloat(inp.value.replace(/\./g,'').replace(',','.'))||0;
+      inp.value=n?n.toLocaleString('pt-BR',{minimumFractionDigits:2}):'';
+      setVal(cid,novo,n);refresh();
+    });
+    row.querySelector('.iedit').onclick=e=>{e.stopPropagation();itemCtx={cid,item:novo,row};document.getElementById('item-ttl').textContent='Editar: '+novo;document.getElementById('item-inp').value=novo;openOvl('ovl-item');setTimeout(()=>document.getElementById('item-inp').select(),300);};
+    if(navigator.onLine){
+      api({action:'save',yr,mo,cat:cid,item:novo,val:v||0}).catch(()=>{});
+      if(item!==novo) api({action:'save',yr,mo,cat:cid,item:item,val:0}).catch(()=>{});
+    }
   }
   refresh(); toast('✅ Renomeado','g');
 }
