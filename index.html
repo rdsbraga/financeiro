@@ -214,6 +214,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:v
       <div class="sec">Ações</div>
       <button class="btn btn-p" onclick="doSave()">💾 Salvar no Sheets</button>
       <button class="btn btn-s" onclick="doLoad()">🔄 Carregar do Sheets</button>
+      <button class="btn btn-s" onclick="replicarItens()">📋 Replicar itens deste mês para outros meses</button>
     </div>
   </div>
 
@@ -731,6 +732,31 @@ function chkP(){
     let i=0;const f=[-8,8,-6,6,-4,4,0];const dots=document.getElementById('pdots');
     const sh=setInterval(()=>{dots.style.transform='translateX('+f[i]+'px)';i++;if(i>=f.length){clearInterval(sh);dots.style.transform='';}},60);
     pv='';upd();
+  }
+}
+
+// ── REPLICAR ITENS ────────────────────────────────────────────────
+async function replicarItens() {
+  if (!navigator.onLine) { toast('Sem conexao','r'); return; }
+  const origem = MN[mo] + '/' + yr;
+  const msg = 'Replicar itens de ' + origem + ' para os outros meses de ' + yr + '? Os valores nao serao alterados.';
+  if (!confirm(msg)) return;
+  showL('Replicando itens...');
+  let ok = 0, erros = 0;
+  for (let m = 0; m < 12; m++) {
+    if (m === mo) continue;
+    try {
+      await api({action:'saveItems', yr, mo:m, items});
+      ok++;
+    } catch(e) {
+      erros++;
+    }
+  }
+  hideL();
+  if (erros === 0) {
+    toast('Itens replicados para ' + ok + ' meses','g');
+  } else {
+    toast('OK: ' + ok + ' meses, Erro: ' + erros,'r');
   }
 }
 
