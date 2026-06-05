@@ -1,4 +1,4 @@
-var CACHE = 'ff-v5';
+var CACHE = 'ff-v6';
 var STATIC = [
   '/financeiro/',
   '/financeiro/index.html',
