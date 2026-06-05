@@ -218,6 +218,24 @@ html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:v
       <div class="sec">Relatórios</div>
       <button class="btn btn-s" onclick="go('rel')">📊 Ver Relatório Anual</button>
     </div>
+    <!-- RELATÓRIO -->
+    <div class="pg" id="pg-rel">
+      <div class="sec" style="margin-top:4px">Relatório Anual — <span id="rel-yr">2025</span></div>
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <button id="btn-rel-cat" onclick="setRelTipo('cat')" style="flex:1;padding:9px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:none;font-family:var(--fn);background:var(--blu);color:#fff">Por Categoria</button>
+        <button id="btn-rel-item" onclick="setRelTipo('item')" style="flex:1;padding:9px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:1px solid var(--b2);font-family:var(--fn);background:var(--s2);color:var(--t2)">Por Item</button>
+      </div>
+      <div class="si" style="margin-bottom:12px">
+        <div class="slb" id="rel-sel-lbl">Categoria</div>
+        <select id="rel-sel" onchange="buildRel()" style="width:100%;padding:10px;background:var(--s2);border:1px solid var(--b2);border-radius:9px;color:var(--tx);font-size:14px;font-family:var(--fn);outline:none;cursor:pointer"></select>
+      </div>
+      <div class="chc" id="rel-chart-wrap" style="display:none">
+        <div class="cht"><svg viewBox="0 0 24 24"><path d="M2 20h.01M7 20v-4"/><path d="M12 20V10"/><path d="M17 20V4"/><path d="M22 20v-8"/></svg><span id="rel-chart-title">Evolução Mensal</span></div>
+        <canvas id="rel-canvas" style="width:100%;max-height:200px;display:block"></canvas>
+      </div>
+      <div id="rel-table"></div>
+    </div>
+
   </div>
 
   <div id="nav">
@@ -851,7 +869,7 @@ function buildRel() {
 
 function renderRelChart(labels, values, color) {
   if (relChart) { relChart.destroy(); relChart = null; }
-  relChart = new Chart(document.getElementById('rel-pie'), {
+  relChart = new Chart(document.getElementById('rel-canvas'), {
     type: 'bar',
     data: {
       labels,
