@@ -215,6 +215,8 @@ html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:v
       <button class="btn btn-p" onclick="doSave()">💾 Salvar no Sheets</button>
       <button class="btn btn-s" onclick="doLoad()">🔄 Carregar do Sheets</button>
       <button class="btn btn-s" onclick="replicarItens()">📋 Replicar itens deste mês para outros meses</button>
+      <div class="sec">Relatórios</div>
+      <button class="btn btn-s" onclick="go('rel')">📊 Ver Relatório Anual</button>
     </div>
   </div>
 
@@ -223,6 +225,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:v
     <button class="ntab" id="nt-rec" onclick="go('rec')"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Receitas</button>
     <button class="ntab" id="nt-des" onclick="go('des')"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Despesas</button>
     <button class="ntab" id="nt-graf" onclick="go('graf')"><svg viewBox="0 0 24 24"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>Gráfico</button>
+    <button class="ntab" id="nt-rel" onclick="go('rel')"><svg viewBox="0 0 24 24"><path d="M2 20h.01M7 20v-4"/><path d="M12 20V10"/><path d="M17 20V4"/><path d="M22 20v-8"/></svg>Relatório</button>
     <button class="ntab" id="nt-cfg" onclick="go('cfg')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Config</button>
   </div>
 </div>
@@ -572,7 +575,7 @@ function refresh() {
 
 // ── NAVEGAÇÃO ──────────────────────────────────────────────────────
 function go(id) {
-  ['home','rec','des','graf','cfg'].forEach(p=>{
+  ['home','rec','des','graf','cfg','rel'].forEach(p=>{
     document.getElementById('pg-'+p).classList.remove('on');
     document.getElementById('nt-'+p).classList.remove('on');
   });
@@ -580,6 +583,14 @@ function go(id) {
   document.getElementById('nt-'+id).classList.add('on');
   document.getElementById('scroll').scrollTop=0;
   if(id==='graf') setTimeout(()=>isTotal?showTotal():buildChart(),80);
+  if(id==='rel') setTimeout(async ()=>{
+    document.getElementById('rel-yr').textContent=yr;
+    showL('Carregando relatorio...');
+    await loadRelYear();
+    hideL();
+    setRelTipo('cat');
+    buildRel();
+  },50);
 }
 
 function buildMonths() {
@@ -758,6 +769,155 @@ async function replicarItens() {
   } else {
     toast('OK: ' + ok + ' meses, Erro: ' + erros,'r');
   }
+}
+
+// ── RELATÓRIO ─────────────────────────────────────────────────────
+let relTipo = 'cat'; // 'cat' ou 'item'
+let relChart = null;
+let relYearData = {}; // {mo: {cat|item: val}}
+
+async function loadRelYear() {
+  if (!navigator.onLine) return;
+  try {
+    const r = await api({action:'loadYear', yr});
+    relYearData = {};
+    Object.keys(r.values||{}).forEach(k => {
+      const p = k.split('|');
+      const m = parseInt(p[0]), cat = p[1], item = p.slice(2).join('|');
+      if (!relYearData[m]) relYearData[m] = {};
+      relYearData[m][K(cat,item)] = r.values[k];
+    });
+  } catch(e) {}
+}
+
+function setRelTipo(tipo) {
+  relTipo = tipo;
+  document.getElementById('btn-rel-cat').style.background = tipo==='cat' ? 'var(--blu)' : 'var(--s2)';
+  document.getElementById('btn-rel-cat').style.color     = tipo==='cat' ? '#fff' : 'var(--t2)';
+  document.getElementById('btn-rel-item').style.background = tipo==='item' ? 'var(--blu)' : 'var(--s2)';
+  document.getElementById('btn-rel-item').style.color      = tipo==='item' ? '#fff' : 'var(--t2)';
+  document.getElementById('rel-sel-lbl').textContent = tipo==='cat' ? 'Categoria' : 'Item';
+  fillRelSelect();
+  buildRel();
+}
+
+function fillRelSelect() {
+  const sel = document.getElementById('rel-sel');
+  sel.innerHTML = '';
+  if (relTipo === 'cat') {
+    // Receitas + todas as categorias
+    const opt0 = document.createElement('option'); opt0.value='rec'; opt0.textContent='💵 Receitas'; sel.appendChild(opt0);
+    catDef.forEach(cat => {
+      const opt = document.createElement('option'); opt.value=cat.id; opt.textContent=cat.e+' '+cat.n; sel.appendChild(opt);
+    });
+  } else {
+    // Todos os itens do mês atual
+    const allItems = [];
+    (items['rec']||[]).forEach(i => allItems.push({cat:'rec', item:i, label:'💵 '+i}));
+    catDef.forEach(cat => (items[cat.id]||[]).forEach(i => allItems.push({cat:cat.id, item:i, label:cat.e+' '+i})));
+    allItems.forEach(({cat,item,label}) => {
+      const opt = document.createElement('option');
+      opt.value = cat+'|'+item; opt.textContent = label; sel.appendChild(opt);
+    });
+  }
+}
+
+function buildRel() {
+  const sel = document.getElementById('rel-sel').value;
+  if (!sel) return;
+
+  document.getElementById('rel-yr').textContent = yr;
+  document.getElementById('rel-chart-wrap').style.display = 'block';
+
+  const labels = MS;
+  const values = [];
+
+  if (relTipo === 'cat') {
+    // Total da categoria em cada mês
+    const catId = sel;
+    for (let m=0; m<12; m++) {
+      const mdb = relYearData[m] || {};
+      if (catId === 'rec') {
+        values.push((items['rec']||[]).reduce((s,i)=>(s+(parseFloat(mdb[K('rec',i)])||0)),0));
+      } else {
+        const cat = catDef.find(c=>c.id===catId);
+        values.push(cat ? (items[catId]||[]).reduce((s,i)=>(s+(parseFloat(mdb[K(catId,i)])||0)),0) : 0);
+      }
+    }
+    const cat = sel==='rec' ? {n:'Receitas',c:'#00D27A'} : catDef.find(c=>c.id===sel)||{n:sel,c:'#4A9EFF'};
+    document.getElementById('rel-chart-title').textContent = cat.n + ' — ' + yr;
+    renderRelChart(labels, values, cat.c);
+    buildRelTable(labels, values, cat.n);
+  } else {
+    // Valor do item em cada mês
+    const [cat, ...itemParts] = sel.split('|');
+    const item = itemParts.join('|');
+    for (let m=0; m<12; m++) {
+      const mdb = relYearData[m] || {};
+      values.push(parseFloat(mdb[K(cat,item)]) || 0);
+    }
+    document.getElementById('rel-chart-title').textContent = item + ' — ' + yr;
+    renderRelChart(labels, values, '#4A9EFF');
+    buildRelTable(labels, values, item);
+  }
+}
+
+function renderRelChart(labels, values, color) {
+  if (relChart) { relChart.destroy(); relChart = null; }
+  relChart = new Chart(document.getElementById('rel-pie'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: color+'99',
+        borderColor: color,
+        borderWidth: 2,
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: {display:false},
+        tooltip: {
+          backgroundColor:'#111D35',borderColor:'#2A3F70',borderWidth:1,
+          titleColor:'#E8EEF8',bodyColor:'#8899BB',
+          callbacks:{label:c=>' '+fmt(c.parsed.y)}
+        }
+      },
+      scales: {
+        x: {ticks:{color:'#8899BB',font:{size:11}},grid:{color:'#1F3060'}},
+        y: {ticks:{color:'#8899BB',font:{size:11},callback:v=>v>0?'R$'+Math.round(v/1000)+'k':0},grid:{color:'#1F3060'}}
+      }
+    }
+  });
+}
+
+function buildRelTable(labels, values, titulo) {
+  const el = document.getElementById('rel-table'); el.innerHTML='';
+  const total = values.reduce((a,b)=>a+b,0);
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:var(--s2);border-radius:10px 10px 0 0;border:1px solid var(--b2)';
+  hdr.innerHTML='<span style="font-size:11px;font-weight:700;color:var(--t2);letter-spacing:.5px;text-transform:uppercase">'+titulo+'</span><span style="font-size:11px;font-weight:700;color:var(--t2)">TOTAL: '+fmt(total)+'</span>';
+  el.appendChild(hdr);
+
+  // Rows
+  const table = document.createElement('div');
+  table.style.cssText='background:var(--s1);border:1px solid var(--b2);border-top:none;border-radius:0 0 10px 10px;overflow:hidden';
+  values.forEach((v,i)=>{
+    if (v === 0) return; // pula meses sem valor
+    const row = document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--b1)';
+    row.innerHTML='<span style="font-size:13px;color:var(--tx)">'+MN[i]+'</span><span style="font-size:13px;font-family:var(--mo);color:var(--grt)">'+fmt(v)+'</span>';
+    table.appendChild(row);
+  });
+  if (table.children.length === 0) {
+    table.innerHTML='<div style="padding:20px;text-align:center;color:var(--t2);font-size:13px">Nenhum valor lançado</div>';
+  }
+  el.appendChild(table);
 }
 
 // ── INIT ────────────────────────────────────────────────────────────
