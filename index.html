@@ -140,7 +140,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:v
 <div id="lock">
   <div style="font-size:52px;margin-bottom:8px">💰</div>
   <div style="font-size:22px;font-weight:700;margin-bottom:4px">Financeiro Família</div>
-  <div style="font-size:13px;color:var(--t2);margin-bottom:36px">Digite a senha</div>
+  <div style="font-size:13px;color:var(--t2);margin-bottom:36px" id="lock-sub">Digite a senha</div>
   <div style="display:flex;gap:12px;margin-bottom:24px" id="pdots">
     <div class="pdot" id="d0"></div><div class="pdot" id="d1"></div><div class="pdot" id="d2"></div>
     <div class="pdot" id="d3"></div><div class="pdot" id="d4"></div><div class="pdot" id="d5"></div>
@@ -154,6 +154,9 @@ html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:v
     <button class="pkey" onclick="pt('0')">0</button>
     <button class="pkey" onclick="pd()" style="font-size:20px">⌫</button>
   </div>
+  <button id="bio-btn" onclick="doBio()" style="display:none;margin-top:24px;padding:12px 28px;border-radius:20px;background:var(--s2);border:1px solid var(--b2);color:var(--tx);font-size:14px;font-family:var(--fn);cursor:pointer">
+    <span style="font-size:22px">&#x1F4F1;</span> Usar biometria
+  </button>
 </div>
 
 <div id="app">
@@ -343,21 +346,29 @@ function fmt(n) { return 'R$ '+Math.abs(n).toLocaleString('pt-BR',{minimumFracti
 
 // ── SAVE / LOAD ───────────────────────────────────────────────────
 async function doSave() {
-  if (!navigator.onLine) { toast('📵 Sem conexão','r'); return; }
-  setSB('saving','Salvando...');
-  // Batch: valores + lista de itens de cada categoria
+  // Monta batch com todos os valores
   const batch = [];
-  // Itens de receita
   getItems('rec').forEach(item => batch.push({cat:'rec', item, val:gv('rec',item)}));
-  // Itens de cada categoria de despesa
   catDef.forEach(cat => getItems(cat.id).forEach(item => batch.push({cat:cat.id, item, val:gv(cat.id,item)})));
+
+  // Salva cache local sempre (funciona offline)
+  saveCache();
+  savePending(batch);
+
+  if (!navigator.onLine) {
+    setSB('saved','✓ Local');
+    toast('📵 Salvo localmente — enviará ao reconectar','g');
+    setTimeout(()=>setSB('','💾 Salvar'), 3000);
+    return;
+  }
+
+  setSB('saving','Salvando...');
   try {
-    // Salva valores
     await api({action:'saveAll', yr, mo, batch});
-    // Salva estrutura de itens do mês (listas por mês)
     await api({action:'saveItems', yr, mo, items});
-    // Salva aparência das categorias (global)
     await api({action:'setCatDef', catDef});
+    clearPending();
+    saveCache();
     const ts = new Date().toLocaleString('pt-BR');
     localStorage.setItem('ff7_saved', ts);
     document.getElementById('lsv').textContent = ts;
@@ -375,13 +386,16 @@ async function doLoad() {
   if (!navigator.onLine) { toast('📵 Sem conexão','r'); return; }
   showL('Carregando '+MN[mo]+'...');
   try {
-    // Uma única chamada retorna tudo
     const r = await api({action:'loadAll', yr, mo});
     if (r.catDef && r.catDef.length > 0) catDef = r.catDef;
     items = r.items || defaultItems();
     db = {};
     Object.keys(r.values||{}).forEach(k => { db[k] = r.values[k]; });
+    // Aplica pendentes locais sobre dados do servidor
+    loadPending().forEach(e => { db[e.cat+'|'+e.item] = e.val; });
+    saveCache();
     buildRec(); buildDes(); refresh();
+    toast('✅ '+MN[mo]+' carregado','g');
   } catch(e) {
     toast('❌ Erro: '+e.message,'r');
   }
@@ -617,16 +631,24 @@ function buildMonths() {
 
 async function switchMo(i) {
   if(i===mo&&!isTotal) return;
+  saveCache(); // salva mês atual antes de sair
   mo=i; isTotal=false; db={}; items={};
-  buildMonths();
-  await doLoad();
+  // Carrega cache do novo mês instantaneamente
+  const hasCache = loadCache();
+  if (!hasCache) items = defaultItems();
+  buildRec(); buildDes(); buildMonths(); refresh();
+  // Sincroniza em background
+  if (navigator.onLine) syncInBackground();
 }
 
 async function chgYr(d) {
+  saveCache();
   yr+=d; mo=new Date().getMonth(); isTotal=false; db={}; items={};
   document.getElementById('yrv').textContent=yr;
-  buildMonths();
-  await doLoad();
+  const hasCache = loadCache();
+  if (!hasCache) items = defaultItems();
+  buildRec(); buildDes(); buildMonths(); refresh();
+  if (navigator.onLine) syncInBackground();
 }
 
 // ── EDITAR ITEM ────────────────────────────────────────────────────
@@ -731,17 +753,107 @@ function fixVH(){document.getElementById('app').style.height=window.innerHeight+
 fixVH(); window.addEventListener('resize',fixVH); window.addEventListener('orientationchange',()=>setTimeout(fixVH,200));
 if('serviceWorker' in navigator) navigator.serviceWorker.register('/financeiro/sw.js').catch(()=>{});
 
-// ── PIN ────────────────────────────────────────────────────────────
-let pv='';
-if(sessionStorage.getItem('ff_auth')==='1') document.getElementById('lock').style.display='none';
+// ── AUTENTICAÇÃO ────────────────────────────────────────────────────
+let pv = '';
+let lockTimer = null;
+const TIMEOUT_MS = 45000; // 45 segundos
+
+// Mostra tela de bloqueio
+function showLock(msg) {
+  pv = ''; upd();
+  const l = document.getElementById('lock');
+  document.getElementById('lock-sub').textContent = msg || 'Digite a senha';
+  document.getElementById('perr').style.opacity = '0';
+  l.style.opacity = '1'; l.style.display = 'flex';
+  // Tenta biometria automaticamente se disponível e não for timeout manual
+  if (!msg && hasBio()) setTimeout(doBio, 400);
+}
+
+function hideLock() {
+  const l = document.getElementById('lock');
+  l.style.transition = 'opacity .35s'; l.style.opacity = '0';
+  setTimeout(() => { l.style.display = 'none'; }, 350);
+  sessionStorage.setItem('ff_auth', '1');
+  resetIdleTimer();
+}
+
+// Timer de inatividade — 45s
+function resetIdleTimer() {
+  clearTimeout(lockTimer);
+  lockTimer = setTimeout(() => {
+    sessionStorage.removeItem('ff_auth');
+    showLock('Sessão expirada. Autentique-se.');
+  }, TIMEOUT_MS);
+}
+
+// Registra qualquer interação do usuário
+['touchstart','mousedown','keydown','scroll'].forEach(ev => {
+  document.addEventListener(ev, () => {
+    if (sessionStorage.getItem('ff_auth') === '1') resetIdleTimer();
+  }, {passive:true});
+});
+
+// Verifica se biometria está disponível
+function hasBio() {
+  return window.PublicKeyCredential !== undefined;
+}
+
+// Configura botão de biometria
+function setupBioBtn() {
+  const btn = document.getElementById('bio-btn');
+  if (hasBio()) btn.style.display = 'block';
+  else btn.style.display = 'none';
+}
+
+// Biometria via WebAuthn
+async function doBio() {
+  if (!hasBio()) { return; }
+  try {
+    // Se já tem credencial registrada, autentica
+    const credId = localStorage.getItem('ff_cred_id');
+    if (credId) {
+      await navigator.credentials.get({
+        publicKey: {
+          challenge: new Uint8Array(32),
+          allowCredentials: [{
+            id: Uint8Array.from(atob(credId), c => c.charCodeAt(0)),
+            type: 'public-key'
+          }],
+          userVerification: 'required',
+          timeout: 30000
+        }
+      });
+      hideLock();
+      return;
+    }
+    // Sem credencial: registra pela primeira vez
+    const reg = await navigator.credentials.create({
+      publicKey: {
+        challenge: new Uint8Array(32),
+        rp: {name: 'Financeiro Familia'},
+        user: {id: new Uint8Array(16), name: 'usuario', displayName: 'Usuario'},
+        pubKeyCredParams: [{type:'public-key', alg:-7}],
+        authenticatorSelection: {userVerification:'required', authenticatorAttachment:'platform'},
+        timeout: 30000
+      }
+    });
+    // Salva ID da credencial
+    const credB64 = btoa(String.fromCharCode(...new Uint8Array(reg.rawId)));
+    localStorage.setItem('ff_cred_id', credB64);
+    hideLock();
+  } catch(e) {
+    // Biometria cancelada ou falhou — não mostra erro, usuário pode usar PIN
+    document.getElementById('lock-sub').textContent = 'Use o PIN abaixo';
+  }
+}
+
+// PIN
 function pt(d){if(pv.length>=6)return;pv+=d;upd();if(pv.length===6)setTimeout(chkP,120);}
 function pd(){pv=pv.slice(0,-1);upd();document.getElementById('perr').style.opacity='0';}
 function upd(){for(let i=0;i<6;i++)document.getElementById('d'+i).classList.toggle('on',i<pv.length);}
 function chkP(){
   if(pv===PIN){
-    sessionStorage.setItem('ff_auth','1');
-    const l=document.getElementById('lock');l.style.transition='opacity .35s';l.style.opacity='0';
-    setTimeout(()=>l.style.display='none',350);
+    hideLock();
   }else{
     document.getElementById('perr').textContent='Senha incorreta';
     document.getElementById('perr').style.opacity='1';
@@ -749,6 +861,15 @@ function chkP(){
     const sh=setInterval(()=>{dots.style.transform='translateX('+f[i]+'px)';i++;if(i>=f.length){clearInterval(sh);dots.style.transform='';}},60);
     pv='';upd();
   }
+}
+
+// Inicializa tela de bloqueio
+setupBioBtn();
+if(sessionStorage.getItem('ff_auth')==='1'){
+  document.getElementById('lock').style.display='none';
+  resetIdleTimer();
+} else {
+  showLock();
 }
 
 // ── REPLICAR ITENS ────────────────────────────────────────────────
@@ -925,31 +1046,109 @@ function buildRelTable(labels, values, titulo) {
   el.appendChild(table);
 }
 
+// ── OFFLINE QUEUE ───────────────────────────────────────────────────
+// Salva dados pendentes no localStorage para enviar quando voltar online
+function savePending(batch) {
+  try {
+    const key = 'ff7_pending_' + yr + '_' + mo;
+    let q = JSON.parse(localStorage.getItem(key) || '[]');
+    // Merge: atualiza existente ou adiciona
+    batch.forEach(entry => {
+      const idx = q.findIndex(e => e.cat===entry.cat && e.item===entry.item);
+      if (idx >= 0) q[idx] = entry; else q.push(entry);
+    });
+    localStorage.setItem(key, JSON.stringify(q));
+  } catch(e) {}
+}
+
+function loadPending() {
+  try {
+    const key = 'ff7_pending_' + yr + '_' + mo;
+    return JSON.parse(localStorage.getItem(key) || '[]');
+  } catch(e) { return []; }
+}
+
+function clearPending() {
+  try { localStorage.removeItem('ff7_pending_' + yr + '_' + mo); } catch(e) {}
+}
+
+// Salva cache local dos dados do mês
+function saveCache() {
+  try {
+    localStorage.setItem('ff7_cache_catdef', JSON.stringify(catDef));
+    localStorage.setItem('ff7_cache_items_' + yr + '_' + mo, JSON.stringify(items));
+    localStorage.setItem('ff7_cache_db_' + yr + '_' + mo, JSON.stringify(db));
+  } catch(e) {}
+}
+
+function loadCache() {
+  try {
+    const cd = localStorage.getItem('ff7_cache_catdef');
+    const it = localStorage.getItem('ff7_cache_items_' + yr + '_' + mo);
+    const db2 = localStorage.getItem('ff7_cache_db_' + yr + '_' + mo);
+    if (cd) catDef = JSON.parse(cd);
+    if (it) items = JSON.parse(it);
+    if (db2) db = JSON.parse(db2);
+    return !!(cd || it);
+  } catch(e) { return false; }
+}
+
+// Quando volta online: envia pendentes e recarrega
+window.addEventListener('online', async () => {
+  toast('📶 Online — sincronizando...', 'g');
+  const pending = loadPending();
+  if (pending.length > 0) {
+    try {
+      await api({action:'saveAll', yr, mo, batch:pending});
+      clearPending();
+      toast('✅ Dados sincronizados', 'g');
+    } catch(e) {}
+  }
+  // Recarrega em background sem bloquear UI
+  syncInBackground();
+});
+
+async function syncInBackground() {
+  if (!navigator.onLine) return;
+  try {
+    const r = await api({action:'loadAll', yr, mo});
+    if (r.catDef && r.catDef.length>0) catDef = r.catDef;
+    if (r.items) items = r.items;
+    // Aplica valores do servidor sem sobrescrever pendentes locais
+    const pending = loadPending();
+    const pendingKeys = new Set(pending.map(e => e.cat+'|'+e.item));
+    Object.keys(r.values||{}).forEach(k => {
+      if (!pendingKeys.has(k)) db[k] = r.values[k];
+    });
+    saveCache();
+    buildRec(); buildDes(); refresh();
+  } catch(e) {}
+}
+
 // ── INIT ────────────────────────────────────────────────────────────
 async function init() {
-  document.getElementById('yrv').textContent=yr;
+  document.getElementById('yrv').textContent = yr;
+
+  // 1. INSTANTÂNEO — carrega do cache local imediatamente
+  const hasCache = loadCache();
+  if (!hasCache) items = defaultItems();
+  buildRec(); buildDes(); buildMonths(); refresh();
+  hideL(); // remove tela de loading imediatamente
+
+  // 2. Aplica pendentes offline no db visual
+  const pending = loadPending();
+  pending.forEach(e => { db[e.cat+'|'+e.item] = e.val; });
+  if (pending.length > 0) { buildRec(); buildDes(); refresh(); }
 
   if (!navigator.onLine) {
-    // Sem rede: usa padrão
-    items=defaultItems();
-    buildRec(); buildDes(); buildMonths(); refresh();
-    hideL(); toast('📵 Offline','r'); return;
+    toast('📵 Offline — dados locais', '');
+    return;
   }
 
-  try {
-    // Uma única chamada ao servidor
-    const r = await api({action:'loadAll', yr, mo});
-    if (r.catDef && r.catDef.length>0) catDef=r.catDef;
-    items = r.items || defaultItems();
-    db={};
-    Object.keys(r.values||{}).forEach(k=>{db[k]=r.values[k];});
-  } catch(e) {
-    items=defaultItems();
-  }
+  // 3. BACKGROUND — sincroniza com Sheets sem bloquear UI
+  syncInBackground();
 
-  buildRec(); buildDes(); buildMonths(); refresh();
-  hideL();
-  document.getElementById('lsv').textContent=localStorage.getItem('ff7_saved')||'—';
+  document.getElementById('lsv').textContent = localStorage.getItem('ff7_saved') || '—';
 }
 
 init();
